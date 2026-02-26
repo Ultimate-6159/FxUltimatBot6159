@@ -375,7 +375,8 @@ class TradingCoordinator:
 
         lstm_path = models_dir / "lstm_transformer.pt"
         if lstm_path.exists():
-            self.lstm_predictor.load(lstm_path)
+            self.lstm_predictor = LSTMTransformerPredictor.from_checkpoint(lstm_path)
+            self.ensemble.lstm_predictor = self.lstm_predictor
 
         rl_path = models_dir / "rl_agent"
         if rl_path.exists() or (models_dir / "rl_agent.zip").exists():
