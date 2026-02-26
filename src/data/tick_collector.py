@@ -38,17 +38,29 @@ class Tick:
 
     @classmethod
     def from_mt5(cls, mt5_tick: Any, prev_mid: float = 0.0, point: float = 0.01) -> Tick:
-        bid = float(mt5_tick.bid)
-        ask = float(mt5_tick.ask)
+        bid = float(mt5_tick['bid'])
+        ask = float(mt5_tick['ask'])
         mid = (bid + ask) / 2.0
         spread = (ask - bid) / point
         direction = 1 if mid > prev_mid else (-1 if mid < prev_mid else 0)
+
+        # Handle volume field — numpy.void uses dtype.names for field access
+        names = mt5_tick.dtype.names if hasattr(mt5_tick, 'dtype') else ()
+        if 'volume_real' in names:
+            vol = float(mt5_tick['volume_real'])
+        elif 'volume' in names:
+            vol = float(mt5_tick['volume'])
+        else:
+            vol = 0.0
+
+        last = float(mt5_tick['last']) if 'last' in names else mid
+
         return cls(
-            time=float(mt5_tick.time_msc) / 1000.0,
+            time=float(mt5_tick['time_msc']) / 1000.0,
             bid=bid,
             ask=ask,
-            last=float(getattr(mt5_tick, "last", mid)),
-            volume=float(getattr(mt5_tick, "volume_real", getattr(mt5_tick, "volume", 0))),
+            last=last,
+            volume=vol,
             spread=spread,
             mid=mid,
             direction=direction,

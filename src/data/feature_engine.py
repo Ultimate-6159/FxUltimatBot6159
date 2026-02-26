@@ -61,7 +61,7 @@ class FeatureEngine:
         features = pd.concat([features, self._volume_profile(df)], axis=1)
 
         # 4. Microstructure
-        if spreads is not None:
+        if spreads is not None and len(spreads) > 0:
             features = pd.concat([features, self._microstructure(df, spreads)], axis=1)
 
         # 5. Volatility Regime
