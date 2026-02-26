@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from src.data.tick_collector import TickCollector
 from src.data.multi_tf_loader import MultiTimeframeLoader
@@ -225,7 +226,6 @@ class TradingCoordinator:
             if tf_data is None or tf_data.feature_matrix is None:
                 return
 
-            import pandas as pd
             m1_df = tf_data.m1
             if m1_df.empty:
                 return
@@ -260,17 +260,33 @@ class TradingCoordinator:
                 current_position=current_pos,
             )
 
-            # 5. Process signal
-            if signal.direction != 0:
-                self._process_signal(signal, tick)
+            # 5. Compute real ATR from M1 data
+            _h = m1_df["high"]
+            _l = m1_df["low"]
+            _c = m1_df["close"]
+            _tr = pd.concat([
+                _h - _l,
+                (_h - _c.shift(1)).abs(),
+                (_l - _c.shift(1)).abs(),
+            ], axis=1).max(axis=1)
+            atr_value = float(_tr.rolling(14).mean().iloc[-1])
+            if np.isnan(atr_value) or atr_value < 0.5:
+                atr_value = float((_h - _l).rolling(14).mean().iloc[-1])
+            if np.isnan(atr_value) or atr_value < 0.5:
+                atr_value = 2.0  # Absolute fallback
+            logger.debug(f"ATR(14) = {atr_value:.3f}")
 
-            # 6. Heartbeat
+            # 6. Process signal
+            if signal.direction != 0:
+                self._process_signal(signal, tick, atr_value)
+
+            # 7. Heartbeat
             self._heartbeat()
 
         except Exception as e:
             logger.error(f"Iteration error: {e}", exc_info=True)
 
-    def _process_signal(self, signal: TradeSignal, tick: dict[str, float]) -> None:
+    def _process_signal(self, signal: TradeSignal, tick: dict[str, float], atr_value: float = 2.0) -> None:
         """Process a trade signal through risk checks and execution."""
 
         # Risk check
@@ -289,8 +305,7 @@ class TradingCoordinator:
             logger.debug("Max concurrent positions reached")
             return
 
-        # Calculate position size
-        atr_value = 2.0  # Default ATR estimate
+        # Calculate position size (ATR from live market data)
         sl_distance = atr_value * get_nested(
             self.cfg, "execution.virtual_tpsl.default_sl_atr_mult", 1.5
         )
