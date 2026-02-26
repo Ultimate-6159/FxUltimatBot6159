@@ -237,10 +237,17 @@ class TradingCoordinator:
             if len(feature_matrix) < self.lstm_predictor.seq_length:
                 return
 
-            # 4. Generate AI signal
-            feature_seq = feature_matrix[-self.lstm_predictor.seq_length:]
+            # 4. Generate AI signal — adapt features to model dimensions
+            lstm_input_dim = self.lstm_predictor.model.input_dim
+            feature_seq = feature_matrix[-self.lstm_predictor.seq_length:, :lstm_input_dim]
+
+            # RL observation: match trained observation space
+            rl_feature_dim = lstm_input_dim  # RL was trained with same feature set
+            if self.rl_agent.agent is not None and hasattr(self.rl_agent.agent, 'observation_space'):
+                rl_feature_dim = self.rl_agent.agent.observation_space.shape[0] - 4
+            rl_features = feature_matrix[-1, :rl_feature_dim]
             rl_obs = np.concatenate([
-                feature_matrix[-1],
+                rl_features,
                 np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)  # Position state
             ])
 
@@ -376,7 +383,7 @@ class TradingCoordinator:
         lstm_path = models_dir / "lstm_transformer.pt"
         if lstm_path.exists():
             self.lstm_predictor = LSTMTransformerPredictor.from_checkpoint(lstm_path)
-            self.ensemble.lstm_predictor = self.lstm_predictor
+            self.ensemble.lstm = self.lstm_predictor
 
         rl_path = models_dir / "rl_agent"
         if rl_path.exists() or (models_dir / "rl_agent.zip").exists():
