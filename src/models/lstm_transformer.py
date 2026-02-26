@@ -63,7 +63,7 @@ class LSTMTransformerModel(nn.Module):
 
     def __init__(
         self,
-        input_dim: int = 24,
+        input_dim: int = 22,
         d_model: int = 64,
         n_heads: int = 4,
         n_lstm_layers: int = 2,
@@ -152,7 +152,7 @@ class LSTMTransformerPredictor:
 
     def __init__(
         self,
-        input_dim: int = 24,
+        input_dim: int = 22,
         d_model: int = 64,
         n_heads: int = 4,
         n_lstm_layers: int = 2,
@@ -328,12 +328,17 @@ class LSTMTransformerPredictor:
         return np.array(sequences, dtype=np.float32), np.array(labels, dtype=np.int64)
 
     def save(self, path: str | Path) -> None:
-        """Save model weights."""
+        """Save model weights and architecture config."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         torch.save({
             "model_state": self.model.state_dict(),
             "optimizer_state": self.optimizer.state_dict(),
+            "config": {
+                "input_dim": self.model.input_dim,
+                "d_model": self.model.d_model,
+                "seq_length": self.seq_length,
+            },
         }, path)
         logger.info(f"Model saved to {path}")
 
@@ -347,3 +352,42 @@ class LSTMTransformerPredictor:
         self.model.load_state_dict(checkpoint["model_state"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state"])
         logger.info(f"Model loaded from {path}")
+
+    @classmethod
+    def from_checkpoint(cls, path: str | Path, device: str | None = None) -> "LSTMTransformerPredictor":
+        """
+        Load a predictor from a saved checkpoint, using the saved architecture config.
+        Falls back to detecting input_dim from saved weight shapes.
+
+        Args:
+            path: Path to the saved .pt file.
+            device: Device to load model on.
+
+        Returns:
+            LSTMTransformerPredictor with loaded weights.
+        """
+        path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {path}")
+
+        checkpoint = torch.load(path, map_location=device or "cpu", weights_only=True)
+        cfg = checkpoint.get("config", {})
+
+        # Detect input_dim from weight shapes if config not saved (legacy checkpoints)
+        if "input_dim" not in cfg:
+            state = checkpoint["model_state"]
+            # input_proj is nn.Linear(input_dim, d_model) → weight shape = (d_model, input_dim)
+            input_dim = state["input_proj.weight"].shape[1]
+            d_model = state["input_proj.weight"].shape[0]
+            cfg["input_dim"] = input_dim
+            cfg["d_model"] = d_model
+
+        predictor = cls(
+            input_dim=cfg.get("input_dim", 24),
+            d_model=cfg.get("d_model", 64),
+            seq_length=cfg.get("seq_length", 60),
+            device=device,
+        )
+        predictor.model.load_state_dict(checkpoint["model_state"])
+        logger.info(f"Model loaded from checkpoint {path} | input_dim={cfg['input_dim']}")
+        return predictor

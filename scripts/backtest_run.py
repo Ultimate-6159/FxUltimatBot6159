@@ -46,13 +46,22 @@ def main():
     tf_loader = MultiTimeframeLoader()
     tf_data = tf_loader.generate_synthetic_data(n_bars=args.bars)
 
-    # Initialize predictor (untrained — for demo)
-    features_cols = 24  # Approximate feature count
-    predictor = LSTMTransformerPredictor(
-        input_dim=features_cols,
-        d_model=64,
-        seq_length=60,
-    )
+    # Load trained model if available, otherwise detect feature count
+    model_path = Path("models/lstm_transformer.pt")
+    if model_path.exists():
+        logger.info(f"Loading trained model from {model_path}")
+        predictor = LSTMTransformerPredictor.from_checkpoint(model_path)
+    else:
+        from src.data.feature_engine import FeatureEngine
+        feature_engine = FeatureEngine(lookback=60)
+        features_df = feature_engine.compute_all_features(tf_data.m1)
+        features_cols = features_df.shape[1]
+        logger.info(f"No trained model found — using untrained predictor (features={features_cols})")
+        predictor = LSTMTransformerPredictor(
+            input_dim=features_cols,
+            d_model=64,
+            seq_length=60,
+        )
 
     # Run backtest
     engine = BacktestEngine(
