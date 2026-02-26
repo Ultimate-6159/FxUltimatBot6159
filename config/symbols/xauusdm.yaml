@@ -1,0 +1,44 @@
+# ============================================================
+# XAUUSDm Symbol Configuration
+# ============================================================
+
+symbol: "XAUUSDm"
+description: "Gold vs US Dollar (Micro)"
+
+# --- Contract Specification ---
+contract:
+  pip_value: 0.01           # 1 pip = $0.01 movement
+  point: 0.01               # MT5 point size
+  digits: 2                 # Price decimal places
+  contract_size: 100        # 1 lot = 100 oz
+  tick_size: 0.01
+  tick_value: 1.0           # USD per tick per lot
+
+# --- Trading Parameters ---
+trading:
+  min_lot: 0.01
+  max_lot: 5.0
+  lot_step: 0.01
+  typical_spread_points: 2.5   # Normal spread in points
+  max_spread_points: 8.0       # Refuse to trade above this
+  swap_long: -15.0             # Swap per lot per day
+  swap_short: 5.0
+
+# --- Session Windows (UTC) ---
+sessions:
+  london_open: "07:00"
+  london_close: "16:00"
+  ny_open: "12:00"
+  ny_close: "21:00"
+  asian_open: "23:00"
+  asian_close: "07:00"
+  # Best volatility: London-NY overlap (12:00-16:00 UTC)
+  preferred_hours:
+    - start: "07:00"
+      end: "21:00"
+
+# --- Gold-Specific Features ---
+features:
+  atr_period: 14
+  volatility_regime_window: 100
+  order_block_volume_threshold: 2.0   # 2x average volume

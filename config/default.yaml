@@ -1,0 +1,108 @@
+# ============================================================
+# FxUltimatBot6159 — Global Configuration
+# ============================================================
+
+mt5:
+  login: 0              # MT5 account number
+  password: ""           # MT5 password
+  server: ""             # Broker server name
+  path: ""               # Path to MT5 terminal (e.g. C:\Program Files\MetaTrader 5\terminal64.exe)
+  timeout: 10000         # Connection timeout (ms)
+
+symbol: "XAUUSDm"
+
+# --- Timeframes for multi-TF analysis ---
+timeframes:
+  - M1
+  - M5
+  - M15
+  - H1
+
+# --- Data Pipeline ---
+data:
+  tick_buffer_size: 10000         # Max ticks held in memory
+  feature_lookback: 60            # Bars of history for feature computation
+  ohlcv_bars: 500                 # Number of OHLCV bars to load per TF
+  order_block_window: 20          # Bars to scan for order blocks
+  liquidity_sweep_threshold: 1.5  # ATR multiplier for sweep detection
+
+# --- AI Model Hyperparameters ---
+ai:
+  lstm_transformer:
+    seq_length: 60              # Input sequence length (minutes)
+    d_model: 64                 # Transformer model dimension
+    n_heads: 4                  # Multi-head attention heads
+    n_lstm_layers: 2            # LSTM layers
+    n_transformer_layers: 2     # Transformer encoder layers
+    dropout: 0.1
+    learning_rate: 0.0003
+    batch_size: 64
+    epochs: 50
+
+  rl_agent:
+    algorithm: "PPO"            # PPO or SAC
+    learning_rate: 0.0003
+    n_steps: 2048
+    batch_size: 64
+    n_epochs: 10
+    gamma: 0.99                 # Discount factor
+    gae_lambda: 0.95
+    clip_range: 0.2
+    total_timesteps: 500000
+
+  ensemble:
+    min_confidence: 0.65        # Minimum LSTM confidence to trade
+    require_agreement: true     # Both models must agree on direction
+
+# --- Broker-Proof Execution ---
+execution:
+  virtual_tpsl:
+    enabled: true
+    monitor_interval_ms: 100    # Price check interval
+    default_tp_atr_mult: 2.0    # TP = entry ± 2×ATR
+    default_sl_atr_mult: 1.5    # SL = entry ± 1.5×ATR
+    trailing_enabled: true
+    trailing_atr_mult: 1.0      # Trail distance = 1×ATR
+
+  spread_guard:
+    enabled: true
+    zscore_threshold: 3.0       # Block trading if z-score > 3
+    baseline_window: 1000       # Rolling tick window for baseline
+    cooldown_seconds: 5         # Wait after anomaly
+    max_slippage_points: 5.0    # Max acceptable slippage
+
+  max_concurrent_positions: 3
+  max_retries: 3
+  retry_delay_ms: 100
+
+# --- Risk Management ---
+risk:
+  max_daily_drawdown_pct: 5.0       # Hard stop: 5% daily loss → stop bot
+  max_trade_risk_pct: 1.5           # Max risk per trade as % of equity
+  max_consecutive_losses: 5         # Consecutive losses → cooldown
+  cooldown_minutes: 30              # Cooldown after consecutive losses
+  position_sizing:
+    method: "kelly"                 # "kelly" or "fixed"
+    kelly_fraction: 0.5             # Half-Kelly (conservative)
+    fixed_lot: 0.01                 # Used when method = "fixed"
+    min_lot: 0.01
+    max_lot: 1.0
+
+# --- Backtesting ---
+backtest:
+  walk_forward:
+    train_window_days: 60           # Train on 60 days
+    test_window_days: 15            # Test on 15 days
+    step_days: 15                   # Roll forward 15 days
+  spread_model: "variable"          # "fixed" or "variable"
+  fixed_spread_points: 3.0
+  commission_per_lot: 7.0           # USD per round-trip lot
+  slippage_model: "random"          # "none", "fixed", "random"
+  max_slippage_points: 2.0
+
+# --- Logging ---
+logging:
+  level: "INFO"
+  log_dir: "logs"
+  trade_journal: true               # Log every trade event
+  heartbeat_interval_seconds: 60
