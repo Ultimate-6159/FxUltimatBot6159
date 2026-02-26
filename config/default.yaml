@@ -4,9 +4,10 @@
 
 mt5:
   login: 0              # MT5 account number
-  password: ""           # MT5 password
-  server: ""             # Broker server name
-  path: ""               # Path to MT5 terminal (e.g. C:\Program Files\MetaTrader 5\terminal64.exe)
+  password: ''           # MT5 password
+  server: ''             # Broker server name
+  path: ''               # Path to MT5 terminal — use single quotes for Windows paths!
+                         # e.g. 'C:\Program Files\MetaTrader 5\terminal64.exe'
   timeout: 10000         # Connection timeout (ms)
 
 symbol: "XAUUSDm"
