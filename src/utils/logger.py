@@ -109,8 +109,9 @@ class TradeFilter(logging.Filter):
 
 
 def get_logger(name: str = "FxBot") -> logging.Logger:
-    """Get existing logger or create default one."""
-    logger = logging.getLogger(name)
-    if not logger.handlers:
-        return setup_logger(name)
-    return logger
+    """Get or create a logger. Handlers are only set up on the root logger."""
+    root_name = name.split(".")[0]
+    root_logger = logging.getLogger(root_name)
+    if not root_logger.handlers:
+        setup_logger(root_name)
+    return logging.getLogger(name)
