@@ -71,6 +71,7 @@ execution:
     baseline_window: 1000       # Rolling tick window for baseline
     cooldown_seconds: 5         # Wait after anomaly
     max_slippage_points: 5.0    # Max acceptable slippage
+    max_spread_points: 50.0     # Absolute max spread (XAUUSDm normal ~20-40 pts)
 
   max_concurrent_positions: 3
   max_retries: 3

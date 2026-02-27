@@ -50,7 +50,7 @@ class SpreadGuard:
         baseline_window: int = 1000,
         cooldown_seconds: float = 5.0,
         max_slippage_points: float = 5.0,
-        max_spread_points: float = 8.0,
+        max_spread_points: float = 50.0,
     ):
         self.zscore_threshold = zscore_threshold
         self.baseline_window = baseline_window

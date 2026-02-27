@@ -107,6 +107,7 @@ class TradingCoordinator:
             baseline_window=get_nested(self.cfg, "execution.spread_guard.baseline_window", 1000),
             cooldown_seconds=get_nested(self.cfg, "execution.spread_guard.cooldown_seconds", 5),
             max_slippage_points=get_nested(self.cfg, "execution.spread_guard.max_slippage_points", 5.0),
+            max_spread_points=get_nested(self.cfg, "execution.spread_guard.max_spread_points", 50.0),
         )
         self.order_manager = OrderManager(
             max_concurrent=exec_cfg.get("max_concurrent_positions", 3),
