@@ -6,6 +6,7 @@ Protects equity with multiple layers of risk limits.
 from __future__ import annotations
 
 import time
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -55,6 +56,7 @@ class RiskManager:
         self.max_consec_losses = max_consecutive_losses
         self.cooldown_minutes = cooldown_minutes
         self.global_max_dd_pct = global_max_drawdown_pct
+        self._lock = threading.Lock()
 
         self._state = RiskState(
             initial_balance=initial_equity,
@@ -78,34 +80,36 @@ class RiskManager:
         Returns:
             (bool, reason) — True if trade allowed, False with reason.
         """
-        now = time.time()
+        with self._lock:
+            now = time.time()
 
-        # Check 1: Global halt
-        if self._state.is_halted:
-            return False, f"HALTED: {self._state.halt_reason}"
+            # Check 1: Global halt
+            if self._state.is_halted:
+                return False, f"HALTED: {self._state.halt_reason}"
 
-        # Check 2: Cooldown after consecutive losses
-        if now < self._state.cooldown_until:
-            remaining = int(self._state.cooldown_until - now)
-            return False, f"Cooldown active: {remaining}s remaining"
+            # Check 2: Cooldown after consecutive losses
+            if now < self._state.cooldown_until:
+                remaining = int(self._state.cooldown_until - now)
+                return False, f"Cooldown active: {remaining}s remaining"
 
-        # Check 3: Daily drawdown
-        daily_dd_pct = self._get_daily_drawdown_pct()
-        if daily_dd_pct >= self.max_daily_dd_pct:
-            self._halt(f"Daily drawdown {daily_dd_pct:.1f}% >= {self.max_daily_dd_pct}%")
-            return False, self._state.halt_reason
+            # Check 3: Daily drawdown
+            daily_dd_pct = self._get_daily_drawdown_pct()
+            if daily_dd_pct >= self.max_daily_dd_pct:
+                self._halt(f"Daily drawdown {daily_dd_pct:.1f}% >= {self.max_daily_dd_pct}%")
+                return False, self._state.halt_reason
 
-        # Check 4: Global drawdown
-        global_dd_pct = self._get_global_drawdown_pct()
-        if global_dd_pct >= self.global_max_dd_pct:
-            self._halt(f"Global drawdown {global_dd_pct:.1f}% >= {self.global_max_dd_pct}%")
-            return False, self._state.halt_reason
+            # Check 4: Global drawdown
+            global_dd_pct = self._get_global_drawdown_pct()
+            if global_dd_pct >= self.global_max_dd_pct:
+                self._halt(f"Global drawdown {global_dd_pct:.1f}% >= {self.global_max_dd_pct}%")
+                return False, self._state.halt_reason
 
-        return True, "OK"
+            return True, "OK"
 
     def max_trade_risk_amount(self) -> float:
         """Get maximum dollar amount at risk for a single trade."""
-        return self._state.current_equity * (self.max_trade_risk_pct / 100.0)
+        with self._lock:
+            return self._state.current_equity * (self.max_trade_risk_pct / 100.0)
 
     # ------------------------------------------------------------------
     # Trade Events
@@ -118,46 +122,57 @@ class RiskManager:
         Args:
             pnl: Realized P&L of the trade (positive = profit).
         """
-        self._state.daily_pnl += pnl
-        self._state.current_equity += pnl
-        self._state.total_trades_today += 1
+        with self._lock:
+            self._state.daily_pnl += pnl
+            self._state.current_equity += pnl
+            self._state.total_trades_today += 1
 
-        # Update peak equity
-        if self._state.current_equity > self._state.peak_equity:
-            self._state.peak_equity = self._state.current_equity
+            # Update peak equity
+            if self._state.current_equity > self._state.peak_equity:
+                self._state.peak_equity = self._state.current_equity
+
+            if pnl < 0:
+                self._state.consecutive_losses += 1
+                consec = self._state.consecutive_losses
+                daily_dd = self._get_daily_drawdown_pct()
+
+                # Check consecutive loss limit
+                if self._state.consecutive_losses >= self.max_consec_losses:
+                    self._state.cooldown_until = time.time() + self.cooldown_minutes * 60
+            else:
+                self._state.consecutive_losses = 0
+                equity = self._state.current_equity
 
         if pnl < 0:
-            self._state.consecutive_losses += 1
             logger.info(
-                f"LOSS | PnL={pnl:.2f} | consecutive={self._state.consecutive_losses} | "
-                f"daily_dd={self._get_daily_drawdown_pct():.1f}%"
+                f"LOSS | PnL={pnl:.2f} | consecutive={consec} | "
+                f"daily_dd={daily_dd:.1f}%"
             )
-
-            # Check consecutive loss limit
-            if self._state.consecutive_losses >= self.max_consec_losses:
-                self._state.cooldown_until = time.time() + self.cooldown_minutes * 60
+            if consec >= self.max_consec_losses:
                 logger.warning(
-                    f"COOLDOWN ACTIVATED: {self._state.consecutive_losses} consecutive losses | "
+                    f"COOLDOWN ACTIVATED: {consec} consecutive losses | "
                     f"Waiting {self.cooldown_minutes} minutes"
                 )
         else:
-            self._state.consecutive_losses = 0
-            logger.info(f"WIN | PnL=+{pnl:.2f} | equity={self._state.current_equity:.2f}")
+            logger.info(f"WIN | PnL=+{pnl:.2f} | equity={equity:.2f}")
 
     def update_equity(self, current_equity: float) -> None:
         """Update current equity (call periodically with account equity)."""
-        self._state.current_equity = current_equity
-        if current_equity > self._state.peak_equity:
-            self._state.peak_equity = current_equity
+        with self._lock:
+            self._state.current_equity = current_equity
+            if current_equity > self._state.peak_equity:
+                self._state.peak_equity = current_equity
 
     def reset_daily(self) -> None:
         """Reset daily counters (call at start of each trading day)."""
-        self._state.daily_start_equity = self._state.current_equity
-        self._state.daily_pnl = 0.0
-        self._state.total_trades_today = 0
-        self._state.is_halted = False
-        self._state.halt_reason = ""
-        logger.info(f"Daily risk reset | Equity: {self._state.current_equity:.2f}")
+        with self._lock:
+            self._state.daily_start_equity = self._state.current_equity
+            self._state.daily_pnl = 0.0
+            self._state.total_trades_today = 0
+            self._state.is_halted = False
+            self._state.halt_reason = ""
+            equity = self._state.current_equity
+        logger.info(f"Daily risk reset | Equity: {equity:.2f}")
 
     # ------------------------------------------------------------------
     # Internal
@@ -185,10 +200,13 @@ class RiskManager:
 
     def emergency_resume(self) -> None:
         """Manually resume trading after halt (use with caution)."""
-        self._state.is_halted = False
-        self._state.halt_reason = ""
-        self._state.consecutive_losses = 0
-        self._state.cooldown_until = 0
+        with self._lock:
+            self._state.is_halted = False
+            self._state.halt_reason = ""
+            self._state.consecutive_losses = 0
+            self._state.cooldown_until = 0
+            self._state.daily_start_equity = self._state.current_equity
+            self._state.daily_pnl = 0.0
         logger.warning("Trading manually resumed after halt")
 
     # ------------------------------------------------------------------
@@ -197,15 +215,16 @@ class RiskManager:
 
     def get_risk_report(self) -> dict[str, Any]:
         """Get comprehensive risk report."""
-        return {
-            "current_equity": self._state.current_equity,
-            "peak_equity": self._state.peak_equity,
-            "daily_pnl": self._state.daily_pnl,
-            "daily_drawdown_pct": self._get_daily_drawdown_pct(),
-            "global_drawdown_pct": self._get_global_drawdown_pct(),
-            "consecutive_losses": self._state.consecutive_losses,
-            "total_trades_today": self._state.total_trades_today,
-            "is_halted": self._state.is_halted,
-            "halt_reason": self._state.halt_reason,
-            "max_trade_risk": self.max_trade_risk_amount(),
-        }
+        with self._lock:
+            return {
+                "current_equity": self._state.current_equity,
+                "peak_equity": self._state.peak_equity,
+                "daily_pnl": self._state.daily_pnl,
+                "daily_drawdown_pct": self._get_daily_drawdown_pct(),
+                "global_drawdown_pct": self._get_global_drawdown_pct(),
+                "consecutive_losses": self._state.consecutive_losses,
+                "total_trades_today": self._state.total_trades_today,
+                "is_halted": self._state.is_halted,
+                "halt_reason": self._state.halt_reason,
+                "max_trade_risk": self._state.current_equity * (self.max_trade_risk_pct / 100.0),
+            }

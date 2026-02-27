@@ -101,6 +101,7 @@ class TradingCoordinator:
             close_position_fn=self.broker.close_position,
             monitor_interval_ms=get_nested(self.cfg, "execution.virtual_tpsl.monitor_interval_ms", 100),
             trailing_enabled=get_nested(self.cfg, "execution.virtual_tpsl.trailing_enabled", True),
+            on_close_callback=self._on_position_closed,
         )
         self.spread_guard = SpreadGuard(
             zscore_threshold=get_nested(self.cfg, "execution.spread_guard.zscore_threshold", 3.0),
@@ -369,6 +370,16 @@ class TradingCoordinator:
             f"SIGNAL EXECUTED | {signal.reason} | lot={lot} | ticket={result.ticket} | "
             f"latency={result.latency_ms:.1f}ms"
         )
+
+    def _on_position_closed(self, ticket: int, exit_price: float, realized_pnl: float, reason: str) -> None:
+        """Callback from VirtualTPSL when a position is closed via TP/SL."""
+        self.order_manager.mark_closed(
+            ticket=ticket,
+            exit_price=exit_price,
+            realized_pnl=realized_pnl,
+            close_reason=reason,
+        )
+        self.risk_manager.on_trade_result(realized_pnl)
 
     def _heartbeat(self) -> None:
         """Periodic status log."""

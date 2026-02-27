@@ -55,9 +55,11 @@ class VirtualTPSL:
         close_position_fn: Callable[[int], Any] | None = None,
         monitor_interval_ms: int = 100,
         trailing_enabled: bool = True,
+        on_close_callback: Callable[[int, float, float, str], None] | None = None,
     ):
         self._levels: dict[int, VirtualLevel] = {}
         self._close_fn = close_position_fn
+        self._on_close = on_close_callback
         self._monitor_interval = monitor_interval_ms / 1000.0
         self._trailing_enabled = trailing_enabled
         self._running = False
@@ -175,21 +177,25 @@ class VirtualTPSL:
 
             if tp_hit:
                 self._tp_hits += 1
+                pnl_points = abs(check_price - level.entry_price)
                 triggered.append({
                     "ticket": ticket,
                     "event": "TP_HIT",
                     "price": check_price,
                     "level": level.take_profit,
                     "direction": level.direction,
-                    "pnl_points": abs(check_price - level.entry_price),
+                    "pnl_points": pnl_points,
                 })
                 logger.info(
                     f"TP_HIT | ticket={ticket} | price={check_price:.2f} | "
-                    f"TP={level.take_profit:.2f} | PnL={abs(check_price - level.entry_price):.2f}"
+                    f"TP={level.take_profit:.2f} | PnL={pnl_points:.2f}"
                 )
                 # Execute close
                 if self._close_fn:
                     self._close_fn(ticket)
+                if self._on_close:
+                    realized_pnl = level.direction * (check_price - level.entry_price)
+                    self._on_close(ticket, check_price, realized_pnl, "tp_hit")
                 self.remove_levels(ticket)
                 continue
 
@@ -202,13 +208,14 @@ class VirtualTPSL:
 
             if sl_hit:
                 self._sl_hits += 1
+                pnl_points = -abs(check_price - level.entry_price)
                 triggered.append({
                     "ticket": ticket,
                     "event": "SL_HIT",
                     "price": check_price,
                     "level": level.stop_loss,
                     "direction": level.direction,
-                    "pnl_points": -abs(check_price - level.entry_price),
+                    "pnl_points": pnl_points,
                 })
                 logger.info(
                     f"SL_HIT | ticket={ticket} | price={check_price:.2f} | "
@@ -216,6 +223,9 @@ class VirtualTPSL:
                 )
                 if self._close_fn:
                     self._close_fn(ticket)
+                if self._on_close:
+                    realized_pnl = level.direction * (check_price - level.entry_price)
+                    self._on_close(ticket, check_price, realized_pnl, "sl_hit")
                 self.remove_levels(ticket)
                 continue
 

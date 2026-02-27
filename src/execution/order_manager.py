@@ -6,6 +6,7 @@ Tracks all orders from signal to fill to close, with trade journal logging.
 from __future__ import annotations
 
 import time
+import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -90,6 +91,7 @@ class OrderManager:
     ):
         self.max_concurrent = max_concurrent
         self.symbol = symbol
+        self._lock = threading.Lock()
 
         self._orders: dict[str, ManagedOrder] = {}
         self._active_tickets: set[int] = set()
@@ -119,27 +121,28 @@ class OrderManager:
 
         Returns None if max concurrent positions reached.
         """
-        if len(self._active_tickets) >= self.max_concurrent:
-            logger.warning(
-                f"Max concurrent positions ({self.max_concurrent}) reached, "
-                f"rejecting new order"
+        with self._lock:
+            if len(self._active_tickets) >= self.max_concurrent:
+                logger.warning(
+                    f"Max concurrent positions ({self.max_concurrent}) reached, "
+                    f"rejecting new order"
+                )
+                return None
+
+            self._order_counter += 1
+            order_id = f"ORD-{self._order_counter:06d}"
+
+            order = ManagedOrder(
+                order_id=order_id,
+                symbol=self.symbol,
+                direction=direction,
+                volume=volume,
+                signal_price=signal_price,
+                signal_source=signal_source,
+                signal_confidence=signal_confidence,
             )
-            return None
 
-        self._order_counter += 1
-        order_id = f"ORD-{self._order_counter:06d}"
-
-        order = ManagedOrder(
-            order_id=order_id,
-            symbol=self.symbol,
-            direction=direction,
-            volume=volume,
-            signal_price=signal_price,
-            signal_source=signal_source,
-            signal_confidence=signal_confidence,
-        )
-
-        self._orders[order_id] = order
+            self._orders[order_id] = order
         logger.info(f"ORDER CREATED | {order.to_journal_entry()}")
         return order
 
@@ -152,19 +155,20 @@ class OrderManager:
         latency_ms: float = 0.0,
     ) -> None:
         """Mark order as filled with MT5 ticket."""
-        order = self._orders.get(order_id)
-        if order is None:
-            logger.error(f"Order {order_id} not found")
-            return
+        with self._lock:
+            order = self._orders.get(order_id)
+            if order is None:
+                logger.error(f"Order {order_id} not found")
+                return
 
-        order.status = OrderStatus.MONITORING
-        order.ticket = ticket
-        order.entry_price = fill_price
-        order.fill_time = time.time()
-        order.slippage_points = slippage_points
-        order.latency_ms = latency_ms
+            order.status = OrderStatus.MONITORING
+            order.ticket = ticket
+            order.entry_price = fill_price
+            order.fill_time = time.time()
+            order.slippage_points = slippage_points
+            order.latency_ms = latency_ms
 
-        self._active_tickets.add(ticket)
+            self._active_tickets.add(ticket)
         logger.info(f"ORDER FILLED | {order.to_journal_entry()}")
 
     def mark_closed(
@@ -175,38 +179,41 @@ class OrderManager:
         close_reason: str = "manual",
     ) -> ManagedOrder | None:
         """Mark position as closed and update statistics."""
-        order = self._find_by_ticket(ticket)
-        if order is None:
-            logger.warning(f"No managed order found for ticket {ticket}")
-            return None
+        with self._lock:
+            order = self._find_by_ticket(ticket)
+            if order is None:
+                logger.warning(f"No managed order found for ticket {ticket}")
+                return None
 
-        order.status = OrderStatus.CLOSED
-        order.exit_price = exit_price
-        order.realized_pnl = realized_pnl
-        order.close_time = time.time()
-        order.close_reason = close_reason
-        order.duration_seconds = order.close_time - order.fill_time
+            order.status = OrderStatus.CLOSED
+            order.exit_price = exit_price
+            order.realized_pnl = realized_pnl
+            order.close_time = time.time()
+            order.close_reason = close_reason
+            order.duration_seconds = order.close_time - order.fill_time
 
-        self._active_tickets.discard(ticket)
+            self._active_tickets.discard(ticket)
 
-        # Update statistics
-        self._total_trades += 1
-        if realized_pnl > 0:
-            self._winning_trades += 1
-        self._total_pnl += realized_pnl
-        self._peak_pnl = max(self._peak_pnl, self._total_pnl)
-        dd = self._peak_pnl - self._total_pnl
-        self._max_drawdown = max(self._max_drawdown, dd)
+            # Update statistics
+            self._total_trades += 1
+            if realized_pnl > 0:
+                self._winning_trades += 1
+            self._total_pnl += realized_pnl
+            self._peak_pnl = max(self._peak_pnl, self._total_pnl)
+            dd = self._peak_pnl - self._total_pnl
+            self._max_drawdown = max(self._max_drawdown, dd)
 
         logger.info(f"ORDER CLOSED | {order.to_journal_entry()}")
         return order
 
     def mark_failed(self, order_id: str, error: str = "") -> None:
         """Mark order as failed."""
-        order = self._orders.get(order_id)
+        with self._lock:
+            order = self._orders.get(order_id)
+            if order:
+                order.status = OrderStatus.FAILED
+                order.close_reason = f"failed: {error}"
         if order:
-            order.status = OrderStatus.FAILED
-            order.close_reason = f"failed: {error}"
             logger.error(f"ORDER FAILED | {order_id} | {error}")
 
     # ------------------------------------------------------------------
@@ -215,18 +222,21 @@ class OrderManager:
 
     def get_active_orders(self) -> list[ManagedOrder]:
         """Get all currently active (monitoring) orders."""
-        return [
-            o for o in self._orders.values()
-            if o.status == OrderStatus.MONITORING
-        ]
+        with self._lock:
+            return [
+                o for o in self._orders.values()
+                if o.status == OrderStatus.MONITORING
+            ]
 
     def get_active_count(self) -> int:
         """Get number of active positions."""
-        return len(self._active_tickets)
+        with self._lock:
+            return len(self._active_tickets)
 
     def has_capacity(self) -> bool:
         """Check if we can open more positions."""
-        return len(self._active_tickets) < self.max_concurrent
+        with self._lock:
+            return len(self._active_tickets) < self.max_concurrent
 
     def get_order_by_ticket(self, ticket: int) -> ManagedOrder | None:
         """Find managed order by MT5 ticket."""
@@ -244,39 +254,41 @@ class OrderManager:
 
     def get_statistics(self) -> dict[str, Any]:
         """Get running trade statistics."""
-        closed_orders = [o for o in self._orders.values() if o.status == OrderStatus.CLOSED]
-        if not closed_orders:
+        with self._lock:
+            closed_orders = [o for o in self._orders.values() if o.status == OrderStatus.CLOSED]
+            if not closed_orders:
+                return {
+                    "total_trades": 0,
+                    "win_rate": 0.0,
+                    "total_pnl": 0.0,
+                    "active_positions": len(self._active_tickets),
+                }
+
+            pnls = [o.realized_pnl for o in closed_orders]
+            wins = [p for p in pnls if p > 0]
+            losses = [p for p in pnls if p <= 0]
+
+            avg_win = sum(wins) / len(wins) if wins else 0
+            avg_loss = abs(sum(losses) / len(losses)) if losses else 0
+            profit_factor = sum(wins) / abs(sum(losses)) if losses and sum(losses) != 0 else float("inf")
+
             return {
-                "total_trades": 0,
-                "win_rate": 0.0,
-                "total_pnl": 0.0,
+                "total_trades": self._total_trades,
+                "winning_trades": self._winning_trades,
+                "win_rate": self._winning_trades / max(self._total_trades, 1),
+                "total_pnl": self._total_pnl,
+                "max_drawdown": self._max_drawdown,
+                "avg_win": avg_win,
+                "avg_loss": avg_loss,
+                "profit_factor": profit_factor,
+                "avg_duration_s": sum(o.duration_seconds for o in closed_orders) / len(closed_orders),
+                "avg_latency_ms": sum(o.latency_ms for o in closed_orders) / len(closed_orders),
                 "active_positions": len(self._active_tickets),
             }
 
-        pnls = [o.realized_pnl for o in closed_orders]
-        wins = [p for p in pnls if p > 0]
-        losses = [p for p in pnls if p <= 0]
-
-        avg_win = sum(wins) / len(wins) if wins else 0
-        avg_loss = abs(sum(losses) / len(losses)) if losses else 0
-        profit_factor = sum(wins) / abs(sum(losses)) if losses and sum(losses) != 0 else float("inf")
-
-        return {
-            "total_trades": self._total_trades,
-            "winning_trades": self._winning_trades,
-            "win_rate": self._winning_trades / max(self._total_trades, 1),
-            "total_pnl": self._total_pnl,
-            "max_drawdown": self._max_drawdown,
-            "avg_win": avg_win,
-            "avg_loss": avg_loss,
-            "profit_factor": profit_factor,
-            "avg_duration_s": sum(o.duration_seconds for o in closed_orders) / len(closed_orders),
-            "avg_latency_ms": sum(o.latency_ms for o in closed_orders) / len(closed_orders),
-            "active_positions": len(self._active_tickets),
-        }
-
     def get_trade_journal(self, last_n: int = 50) -> list[str]:
         """Get last N trade journal entries."""
-        closed = [o for o in self._orders.values() if o.status == OrderStatus.CLOSED]
-        closed.sort(key=lambda o: o.close_time, reverse=True)
-        return [o.to_journal_entry() for o in closed[:last_n]]
+        with self._lock:
+            closed = [o for o in self._orders.values() if o.status == OrderStatus.CLOSED]
+            closed.sort(key=lambda o: o.close_time, reverse=True)
+            return [o.to_journal_entry() for o in closed[:last_n]]

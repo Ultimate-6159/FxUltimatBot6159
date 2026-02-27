@@ -86,9 +86,9 @@ class TestVirtualTPSL:
     def test_trailing_never_widens(self):
         self.vtpsl.set_levels(1001, 1, 2650.0, 10.0, 3.0, trailing_distance=2.0)
 
-        # Move up then down — SL should not decrease
-        self.vtpsl.check_price(current_bid=2655.0, current_ask=2655.5)
-        self.vtpsl.check_price(current_bid=2652.0, current_ask=2652.5)
+        # Move up then pull back (but stay above trailed SL) — SL should not decrease
+        self.vtpsl.check_price(current_bid=2655.0, current_ask=2655.5)  # SL trails to 2653
+        self.vtpsl.check_price(current_bid=2653.5, current_ask=2654.0)  # Above SL, no trigger
         level = self.vtpsl.get_level(1001)
         assert level is not None
         assert level.stop_loss == 2653.0  # Should stay at 2653, not go back
