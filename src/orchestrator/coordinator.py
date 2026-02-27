@@ -142,10 +142,20 @@ class TradingCoordinator:
         self._iteration_count = 0
 
         # Entry cooldowns
-        self._min_entry_interval = exec_cfg.get("min_entry_interval_seconds", 60)
-        self._sl_cooldown = exec_cfg.get("sl_cooldown_seconds", 120)
+        self._min_entry_interval = exec_cfg.get("min_entry_interval_seconds", 120)
+        self._sl_cooldown = exec_cfg.get("sl_cooldown_seconds", 300)
         self._last_entry_time = 0.0
         self._last_sl_time = 0.0
+
+        # Signal consistency — require N consecutive same-direction signals
+        self._signal_consistency_bars = exec_cfg.get("signal_consistency_bars", 3)
+        self._recent_signals: list[int] = []  # last N signal directions
+
+        # Spread-to-SL guard — skip trades where spread eats too much of the edge
+        self._max_spread_to_sl_pct = exec_cfg.get("max_spread_to_sl_pct", 15)
+
+        # Post-fill slippage rejection — close immediately if fill was too bad
+        self._max_fill_slippage = exec_cfg.get("max_fill_slippage_points", 30.0)
 
     # ------------------------------------------------------------------
     # Main Loop
@@ -284,8 +294,12 @@ class TradingCoordinator:
                 atr_value = 2.0  # Absolute fallback
             logger.debug(f"ATR(14) = {atr_value:.3f}")
 
-            # 6. Process signal
-            if signal.direction != 0:
+            # 6. Track signal consistency and process
+            self._recent_signals.append(signal.direction)
+            if len(self._recent_signals) > self._signal_consistency_bars:
+                self._recent_signals = self._recent_signals[-self._signal_consistency_bars:]
+
+            if signal.direction != 0 and self._is_signal_consistent(signal.direction):
                 self._process_signal(signal, tick, atr_value)
 
             # 7. Heartbeat
@@ -306,9 +320,9 @@ class TradingCoordinator:
         if now - self._last_sl_time < self._sl_cooldown:
             return
 
-        # Duplicate direction check — don't stack same direction
+        # No hedging — block ALL entries while ANY position is open
         active = self.order_manager.get_active_orders()
-        if any(o.direction == signal.direction for o in active):
+        if active:
             return
 
         # Risk check
@@ -329,8 +343,19 @@ class TradingCoordinator:
 
         # Calculate position size (ATR from live market data)
         sl_distance = atr_value * get_nested(
-            self.cfg, "execution.virtual_tpsl.default_sl_atr_mult", 1.5
+            self.cfg, "execution.virtual_tpsl.default_sl_atr_mult", 2.0
         )
+
+        # Spread-to-SL guard — skip trade if spread eats too much of the edge
+        spread_price = tick["spread"] if tick.get("spread", 0) > 0 else 0.0
+        if sl_distance > 0:
+            spread_pct = (spread_price / sl_distance) * 100
+            if spread_pct > self._max_spread_to_sl_pct:
+                logger.debug(
+                    f"Trade rejected: spread/SL ratio {spread_pct:.1f}% > {self._max_spread_to_sl_pct}%"
+                )
+                return
+
         lot = self.position_sizer.calculate_lot_size(
             equity=self.risk_manager.state.current_equity,
             sl_distance_price=sl_distance,
@@ -369,12 +394,31 @@ class TradingCoordinator:
         # Track slippage
         self.spread_guard.record_slippage(result.slippage_points)
 
+        # Post-fill slippage rejection — close immediately if fill was too bad
+        if abs(result.slippage_points) > self._max_fill_slippage:
+            logger.warning(
+                f"SLIPPAGE REJECTION | ticket={result.ticket} | "
+                f"slippage={result.slippage_points:.1f}pts > max {self._max_fill_slippage:.1f} | "
+                f"Closing immediately"
+            )
+            close_result = self.broker.close_position(result.ticket)
+            if close_result.success:
+                realized_pnl = signal.direction * (close_result.price - result.price)
+                self.order_manager.mark_closed(
+                    ticket=result.ticket,
+                    exit_price=close_result.price,
+                    realized_pnl=realized_pnl,
+                    close_reason="slippage_rejection",
+                )
+                self.risk_manager.on_trade_result(realized_pnl)
+            return
+
         # Set virtual TP/SL (Stealth Mode — NO TP/SL sent to broker)
         tp_distance = atr_value * get_nested(
-            self.cfg, "execution.virtual_tpsl.default_tp_atr_mult", 3.0
+            self.cfg, "execution.virtual_tpsl.default_tp_atr_mult", 4.0
         )
         trailing_distance = atr_value * get_nested(
-            self.cfg, "execution.virtual_tpsl.trailing_atr_mult", 1.0
+            self.cfg, "execution.virtual_tpsl.trailing_atr_mult", 1.5
         )
 
         self.virtual_tpsl.set_levels(
@@ -391,6 +435,12 @@ class TradingCoordinator:
             f"latency={result.latency_ms:.1f}ms"
         )
         self._last_entry_time = time.time()
+
+    def _is_signal_consistent(self, direction: int) -> bool:
+        """Check if signal direction has been stable for N consecutive bars."""
+        if len(self._recent_signals) < self._signal_consistency_bars:
+            return False
+        return all(s == direction for s in self._recent_signals[-self._signal_consistency_bars:])
 
     def _on_position_closed(self, ticket: int, exit_price: float, realized_pnl: float, reason: str) -> None:
         """Callback from VirtualTPSL when a position is closed via TP/SL."""

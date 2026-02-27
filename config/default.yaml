@@ -52,7 +52,7 @@ ai:
     total_timesteps: 500000
 
   ensemble:
-    min_confidence: 0.65        # Minimum LSTM confidence to trade
+    min_confidence: 0.75        # Minimum LSTM confidence to trade
     require_agreement: true     # Both models must agree on direction
 
 # --- Broker-Proof Execution ---
@@ -60,10 +60,10 @@ execution:
   virtual_tpsl:
     enabled: true
     monitor_interval_ms: 100    # Price check interval
-    default_tp_atr_mult: 3.0    # TP = entry ± 3×ATR  (R:R = 2:1)
-    default_sl_atr_mult: 1.5    # SL = entry ± 1.5×ATR
+    default_tp_atr_mult: 4.0    # TP = entry ± 4×ATR  (R:R = 2:1)
+    default_sl_atr_mult: 2.0    # SL = entry ± 2×ATR  (wider to survive noise)
     trailing_enabled: true
-    trailing_atr_mult: 1.0      # Trail distance = 1×ATR
+    trailing_atr_mult: 1.5      # Trail distance = 1.5×ATR (less aggressive)
 
   spread_guard:
     enabled: true
@@ -73,9 +73,12 @@ execution:
     max_slippage_points: 5.0    # Max acceptable slippage
     max_spread_points: 50.0     # Absolute max spread (XAUUSDm normal ~20-40 pts)
 
-  max_concurrent_positions: 3
-  min_entry_interval_seconds: 60  # Min seconds between opening new positions
-  sl_cooldown_seconds: 120        # Cooldown after SL hit before new entries
+  max_concurrent_positions: 1    # One position at a time (no hedging)
+  min_entry_interval_seconds: 120 # Min seconds between opening new positions
+  sl_cooldown_seconds: 300        # 5min cooldown after SL hit before new entries
+  signal_consistency_bars: 3      # Signal must persist N iterations before entry
+  max_spread_to_sl_pct: 15        # Max spread as % of SL distance — skip if too high
+  max_fill_slippage_points: 30.0  # Reject fill (close immediately) if slippage exceeds this
   max_retries: 3
   retry_delay_ms: 100
 
