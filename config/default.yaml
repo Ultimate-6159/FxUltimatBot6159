@@ -60,7 +60,7 @@ execution:
   virtual_tpsl:
     enabled: true
     monitor_interval_ms: 100    # Price check interval
-    default_tp_atr_mult: 2.0    # TP = entry ± 2×ATR
+    default_tp_atr_mult: 3.0    # TP = entry ± 3×ATR  (R:R = 2:1)
     default_sl_atr_mult: 1.5    # SL = entry ± 1.5×ATR
     trailing_enabled: true
     trailing_atr_mult: 1.0      # Trail distance = 1×ATR
@@ -74,6 +74,8 @@ execution:
     max_spread_points: 50.0     # Absolute max spread (XAUUSDm normal ~20-40 pts)
 
   max_concurrent_positions: 3
+  min_entry_interval_seconds: 60  # Min seconds between opening new positions
+  sl_cooldown_seconds: 120        # Cooldown after SL hit before new entries
   max_retries: 3
   retry_delay_ms: 100
 

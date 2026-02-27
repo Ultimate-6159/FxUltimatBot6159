@@ -141,6 +141,12 @@ class TradingCoordinator:
         self._last_heartbeat = 0.0
         self._iteration_count = 0
 
+        # Entry cooldowns
+        self._min_entry_interval = exec_cfg.get("min_entry_interval_seconds", 60)
+        self._sl_cooldown = exec_cfg.get("sl_cooldown_seconds", 120)
+        self._last_entry_time = 0.0
+        self._last_sl_time = 0.0
+
     # ------------------------------------------------------------------
     # Main Loop
     # ------------------------------------------------------------------
@@ -290,6 +296,20 @@ class TradingCoordinator:
 
     def _process_signal(self, signal: TradeSignal, tick: dict[str, float], atr_value: float = 2.0) -> None:
         """Process a trade signal through risk checks and execution."""
+        now = time.time()
+
+        # Entry interval cooldown — prevent rapid-fire entries
+        if now - self._last_entry_time < self._min_entry_interval:
+            return
+
+        # Post-SL cooldown — don't chase after a stop loss
+        if now - self._last_sl_time < self._sl_cooldown:
+            return
+
+        # Duplicate direction check — don't stack same direction
+        active = self.order_manager.get_active_orders()
+        if any(o.direction == signal.direction for o in active):
+            return
 
         # Risk check
         can_trade, reason = self.risk_manager.can_trade()
@@ -351,7 +371,7 @@ class TradingCoordinator:
 
         # Set virtual TP/SL (Stealth Mode — NO TP/SL sent to broker)
         tp_distance = atr_value * get_nested(
-            self.cfg, "execution.virtual_tpsl.default_tp_atr_mult", 2.0
+            self.cfg, "execution.virtual_tpsl.default_tp_atr_mult", 3.0
         )
         trailing_distance = atr_value * get_nested(
             self.cfg, "execution.virtual_tpsl.trailing_atr_mult", 1.0
@@ -370,6 +390,7 @@ class TradingCoordinator:
             f"SIGNAL EXECUTED | {signal.reason} | lot={lot} | ticket={result.ticket} | "
             f"latency={result.latency_ms:.1f}ms"
         )
+        self._last_entry_time = time.time()
 
     def _on_position_closed(self, ticket: int, exit_price: float, realized_pnl: float, reason: str) -> None:
         """Callback from VirtualTPSL when a position is closed via TP/SL."""
@@ -380,6 +401,8 @@ class TradingCoordinator:
             close_reason=reason,
         )
         self.risk_manager.on_trade_result(realized_pnl)
+        if reason == "sl_hit":
+            self._last_sl_time = time.time()
 
     def _heartbeat(self) -> None:
         """Periodic status log."""
