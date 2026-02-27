@@ -3,10 +3,10 @@
 # ============================================================
 
 mt5:
-  login: 0              # MT5 account number
-  password: ''           # MT5 password
-  server: ''             # Broker server name
-  path: ''               # Path to MT5 terminal — use single quotes for Windows paths!
+  login: 415146568              # MT5 account number
+  password: 'Ultimate@6159'           # MT5 password
+  server: 'Exness-MT5Trial14'             # Broker server name
+  path: 'C:\Program Files\MetaTrader 5\terminal64.exe'               # Path to MT5 terminal — use single quotes for Windows paths!
                          # e.g. 'C:\Program Files\MetaTrader 5\terminal64.exe'
   timeout: 10000         # Connection timeout (ms)
 
@@ -94,6 +94,18 @@ risk:
     fixed_lot: 0.01                 # Used when method = "fixed"
     min_lot: 0.01
     max_lot: 1.0
+
+# --- Market Structure Filters (rule-based, independent of AI) ---
+filters:
+  htf_ema_period: 50              # H1 EMA period for trend direction
+  rsi_period: 14                  # M5 RSI period for momentum
+  rsi_buy_threshold: 45.0         # RSI must be > this for BUY
+  rsi_sell_threshold: 55.0        # RSI must be < this for SELL
+  session_start_utc: 7            # Active trading starts (UTC hour)
+  session_end_utc: 21             # Active trading ends (UTC hour)
+  atr_low_percentile: 10.0        # Skip if ATR below this percentile (dead market)
+  atr_high_percentile: 95.0       # Skip if ATR above this percentile (chaos/news)
+  server_utc_offset: 2            # MT5 server UTC offset (Exness = UTC+2)
 
 # --- Backtesting ---
 backtest:

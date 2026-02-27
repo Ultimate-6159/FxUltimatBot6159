@@ -26,6 +26,7 @@ from src.execution.spread_guard import SpreadGuard
 from src.execution.order_manager import OrderManager
 from src.risk.risk_manager import RiskManager
 from src.risk.position_sizer import PositionSizer
+from src.filters.market_filter import MarketFilter
 from src.utils.logger import get_logger
 from src.utils.config import load_config, get_nested
 
@@ -156,6 +157,23 @@ class TradingCoordinator:
 
         # Post-fill slippage rejection — close immediately if fill was too bad
         self._max_fill_slippage = exec_cfg.get("max_fill_slippage_points", 30.0)
+
+        # Market structure filters (rule-based, independent of AI)
+        filter_cfg = self.cfg.get("filters", {})
+        self.market_filter = MarketFilter(
+            ema_period=filter_cfg.get("htf_ema_period", 50),
+            rsi_period=filter_cfg.get("rsi_period", 14),
+            rsi_buy_threshold=filter_cfg.get("rsi_buy_threshold", 45.0),
+            rsi_sell_threshold=filter_cfg.get("rsi_sell_threshold", 55.0),
+            session_start_utc=filter_cfg.get("session_start_utc", 7),
+            session_end_utc=filter_cfg.get("session_end_utc", 21),
+            atr_low_percentile=filter_cfg.get("atr_low_percentile", 10.0),
+            atr_high_percentile=filter_cfg.get("atr_high_percentile", 95.0),
+            server_utc_offset=filter_cfg.get("server_utc_offset", 2),
+        )
+
+        # Cache multi-TF data for filter use
+        self._last_tf_data = None
 
     # ------------------------------------------------------------------
     # Main Loop
@@ -300,7 +318,17 @@ class TradingCoordinator:
                 self._recent_signals = self._recent_signals[-self._signal_consistency_bars:]
 
             if signal.direction != 0 and self._is_signal_consistent(signal.direction):
-                self._process_signal(signal, tick, atr_value)
+                # Market structure filter — rule-based gates independent of AI
+                filter_ok, filter_reason = self.market_filter.check_all(
+                    h1_df=tf_data.h1,
+                    m5_df=tf_data.m5,
+                    m1_df=m1_df,
+                    direction=signal.direction,
+                )
+                if not filter_ok:
+                    logger.debug(f"Trade filtered: {filter_reason}")
+                else:
+                    self._process_signal(signal, tick, atr_value)
 
             # 7. Heartbeat
             self._heartbeat()
